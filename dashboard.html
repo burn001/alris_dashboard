@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALRIS 사용량 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #eee;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2rem;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .stat-card h3 { font-size: 0.9rem; color: #aaa; margin-bottom: 10px; }
+        .stat-card .value { font-size: 2rem; font-weight: bold; }
+        .stat-card.v1 .value { color: #00d2ff; }
+        .stat-card.v2 .value { color: #ff6b6b; }
+        .chart-container {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .chart-title {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            color: #ddd;
+        }
+        .chart-wrapper { height: 300px; }
+        .tables-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .table-container {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        th { color: #aaa; font-weight: 500; }
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            border: none;
+            padding: 15px 25px;
+            border-radius: 30px;
+            color: white;
+            cursor: pointer;
+            font-size: 1rem;
+            box-shadow: 0 4px 15px rgba(0,210,255,0.3);
+        }
+        .refresh-btn:hover { transform: scale(1.05); }
+        .last-updated { text-align: center; color: #666; margin-top: 20px; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 ALRIS 사용량 대시보드</h1>
+        
+        <div class="stats-grid">
+            <div class="stat-card v1">
+                <h3>archilaw_v2 총 사용량</h3>
+                <div class="value" id="total-v1">-</div>
+            </div>
+            <div class="stat-card v1">
+                <h3>archilaw_v2 최근 7일</h3>
+                <div class="value" id="week-v1">-</div>
+            </div>
+            <div class="stat-card v2">
+                <h3>ALRIS V2 총 사용량</h3>
+                <div class="value" id="total-v2">-</div>
+            </div>
+            <div class="stat-card v2">
+                <h3>ALRIS V2 최근 7일</h3>
+                <div class="value" id="week-v2">-</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title">📈 일별 사용량 추이</div>
+            <div class="chart-wrapper">
+                <canvas id="mainChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title">📊 최근 30일 비교</div>
+            <div class="chart-wrapper">
+                <canvas id="recentChart"></canvas>
+            </div>
+        </div>
+
+        <div class="tables-grid">
+            <div class="table-container">
+                <div class="chart-title">archilaw_v2 (qa_log) 최근 기록</div>
+                <table id="table-v1">
+                    <thead><tr><th>날짜</th><th>건수</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="table-container">
+                <div class="chart-title">ALRIS V2 최근 기록</div>
+                <table id="table-v2">
+                    <thead><tr><th>날짜</th><th>건수</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="last-updated" id="lastUpdated"></div>
+    </div>
+
+    <button class="refresh-btn" onclick="location.reload()">🔄 새로고침</button>
+
+    <script>
+        let chartMain, chartRecent;
+
+        async function loadCSV(filename) {
+            try {
+                const response = await fetch(filename + '?t=' + Date.now());
+                const text = await response.text();
+                const lines = text.trim().split('\n').slice(1);
+                return lines.map(line => {
+                    const [date, count] = line.split(',');
+                    return { date, count: parseInt(count) };
+                });
+            } catch (e) {
+                console.error('Error loading', filename, e);
+                return [];
+            }
+        }
+
+        function calcStats(data) {
+            const total = data.reduce((sum, d) => sum + d.count, 0);
+            const last7 = data.slice(-7).reduce((sum, d) => sum + d.count, 0);
+            return { total, last7 };
+        }
+
+        function updateTable(tableId, data) {
+            const tbody = document.querySelector(`#${tableId} tbody`);
+            tbody.innerHTML = data.slice(-20).reverse().map(d => 
+                `<tr><td>${d.date}</td><td>${d.count.toLocaleString()}</td></tr>`
+            ).join('');
+        }
+
+        function createCharts(dataV1, dataV2) {
+            const ctx1 = document.getElementById('mainChart').getContext('2d');
+            const ctx2 = document.getElementById('recentChart').getContext('2d');
+
+            // Merge all dates
+            const allDates = [...new Set([...dataV1.map(d => d.date), ...dataV2.map(d => d.date)])].sort();
+            
+            const v1Map = Object.fromEntries(dataV1.map(d => [d.date, d.count]));
+            const v2Map = Object.fromEntries(dataV2.map(d => [d.date, d.count]));
+
+            chartMain = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: allDates,
+                    datasets: [{
+                        label: 'archilaw_v2',
+                        data: allDates.map(d => v1Map[d] || 0),
+                        borderColor: '#00d2ff',
+                        backgroundColor: 'rgba(0,210,255,0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }, {
+                        label: 'ALRIS V2',
+                        data: allDates.map(d => v2Map[d] || 0),
+                        borderColor: '#ff6b6b',
+                        backgroundColor: 'rgba(255,107,107,0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#aaa' } } },
+                    scales: {
+                        x: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    }
+                }
+            });
+
+            // Recent 30 days
+            const recent30 = allDates.slice(-30);
+            chartRecent = new Chart(ctx2, {
+                type: 'bar',
+                data: {
+                    labels: recent30,
+                    datasets: [{
+                        label: 'archilaw_v2',
+                        data: recent30.map(d => v1Map[d] || 0),
+                        backgroundColor: 'rgba(0,210,255,0.7)'
+                    }, {
+                        label: 'ALRIS V2',
+                        data: recent30.map(d => v2Map[d] || 0),
+                        backgroundColor: 'rgba(255,107,107,0.7)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#aaa' } } },
+                    scales: {
+                        x: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    }
+                }
+            });
+        }
+
+        async function init() {
+            const [dataV1, dataV2] = await Promise.all([
+                loadCSV('daily_usage.csv'),
+                loadCSV('daily_usage_v2.csv')
+            ]);
+
+            const statsV1 = calcStats(dataV1);
+            const statsV2 = calcStats(dataV2);
+
+            document.getElementById('total-v1').textContent = statsV1.total.toLocaleString();
+            document.getElementById('week-v1').textContent = statsV1.last7.toLocaleString();
+            document.getElementById('total-v2').textContent = statsV2.total.toLocaleString();
+            document.getElementById('week-v2').textContent = statsV2.last7.toLocaleString();
+
+            updateTable('table-v1', dataV1);
+            updateTable('table-v2', dataV2);
+
+            createCharts(dataV1, dataV2);
+
+            document.getElementById('lastUpdated').textContent = 
+                '마지막 업데이트: ' + new Date().toLocaleString('ko-KR');
+        }
+
+        init();
+    </script>
+</body>
+</html>
